@@ -384,6 +384,16 @@ public class DownloadClient implements AutoCloseable {
 		return withConnection(connection -> connection.sendRefreshRequest(fileHashes, destination));
 	}
 
+	public CompletableFuture<Void> announcePeer(String lanHost, int lanPort, byte[] token) {
+		return withConnection(connection -> connection.sendPeerAnnounce(lanHost, lanPort, token));
+	}
+
+	public CompletableFuture<List<PeerInfo>> requestPeerList() {
+		return withConnection(Connection::sendPeerListRequest);
+	}
+
+	public record PeerInfo(String uuid, String playerName, String lanHost, int lanPort, byte[] token) {}
+
 	static boolean isSelfSigned(X509Certificate certificate) {
 		if (certificate == null || !certificate.getSubjectX500Principal().equals(certificate.getIssuerX500Principal())) return false;
 
@@ -532,6 +542,110 @@ class Connection implements AutoCloseable {
 				finalBlock(exception);
 			}
 		}, executor);
+	}
+
+	public CompletableFuture<Void> sendPeerAnnounce(String lanHost, int lanPort, byte[] token) {
+		return CompletableFuture.supplyAsync(() -> {
+			Exception exception = null;
+			try {
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				DataOutputStream dos = new DataOutputStream(baos);
+				dos.writeByte(protocolVersion);
+				dos.writeByte(PEER_ANNOUNCE_TYPE);
+				dos.write(secretBytes);
+				byte[] hostBytes = lanHost.getBytes(StandardCharsets.UTF_8);
+				dos.writeInt(hostBytes.length);
+				dos.write(hostBytes);
+				dos.writeInt(lanPort);
+				dos.writeInt(token.length);
+				dos.write(token);
+
+				writeProtocolMessage(baos.toByteArray());
+				readAckResponse();
+				return null;
+			} catch (Exception e) {
+				exception = e;
+				throw new CompletionException(e);
+			} finally {
+				finalBlock(exception);
+			}
+		}, executor);
+	}
+
+	public CompletableFuture<List<DownloadClient.PeerInfo>> sendPeerListRequest() {
+		return CompletableFuture.supplyAsync(() -> {
+			Exception exception = null;
+			try {
+				ByteArrayOutputStream baos = new ByteArrayOutputStream();
+				DataOutputStream dos = new DataOutputStream(baos);
+				dos.writeByte(protocolVersion);
+				dos.writeByte(PEER_LIST_REQUEST_TYPE);
+				dos.write(secretBytes);
+
+				writeProtocolMessage(baos.toByteArray());
+				return readPeerListResponse();
+			} catch (Exception e) {
+				exception = e;
+				throw new CompletionException(e);
+			} finally {
+				finalBlock(exception);
+			}
+		}, executor);
+	}
+
+	private void readAckResponse() throws IOException {
+		byte[] headerData = readProtocolMessageFrame();
+		ByteBuffer headerWrap = ByteBuffer.wrap(headerData);
+
+		byte version = headerWrap.get();
+		byte messageType = headerWrap.get();
+
+		if (messageType == ERROR) {
+			int errLen = headerWrap.getInt();
+			byte[] errBytes = new byte[errLen];
+			headerWrap.get(errBytes);
+			throw new IOException("Server error: " + new String(errBytes, StandardCharsets.UTF_8));
+		}
+
+		if (messageType != END_OF_TRANSMISSION) throw new IOException("Unexpected message type: " + messageType);
+	}
+
+	private List<DownloadClient.PeerInfo> readPeerListResponse() throws IOException {
+		byte[] headerData = readProtocolMessageFrame();
+		ByteBuffer headerWrap = ByteBuffer.wrap(headerData);
+
+		byte version = headerWrap.get();
+		byte messageType = headerWrap.get();
+
+		if (messageType == ERROR) {
+			int errLen = headerWrap.getInt();
+			byte[] errBytes = new byte[errLen];
+			headerWrap.get(errBytes);
+			throw new IOException("Server error: " + new String(errBytes, StandardCharsets.UTF_8));
+		}
+
+		if (messageType != PEER_LIST_RESPONSE_TYPE) throw new IOException("Unexpected message type: " + messageType);
+
+		int count = headerWrap.getInt();
+		List<DownloadClient.PeerInfo> peers = new ArrayList<>(count);
+		for (int i = 0; i < count; i++) {
+			String uuid = readLengthPrefixedUtf8(headerWrap);
+			String playerName = readLengthPrefixedUtf8(headerWrap);
+			String lanHost = readLengthPrefixedUtf8(headerWrap);
+			int lanPort = headerWrap.getInt();
+			int tokenLength = headerWrap.getInt();
+			byte[] token = new byte[tokenLength];
+			headerWrap.get(token);
+			peers.add(new DownloadClient.PeerInfo(uuid, playerName, lanHost, lanPort, token));
+		}
+		return peers;
+	}
+
+	private static String readLengthPrefixedUtf8(ByteBuffer buffer) {
+		int length = buffer.getInt();
+		byte[] bytes = new byte[length];
+		buffer.get(bytes);
+		return new String(bytes, StandardCharsets.UTF_8);
 	}
 
 	private void finalBlock(Exception exception) {

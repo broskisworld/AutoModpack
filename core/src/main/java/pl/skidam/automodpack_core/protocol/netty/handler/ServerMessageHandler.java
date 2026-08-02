@@ -21,15 +21,22 @@ import io.netty.handler.stream.ChunkedNioStream;
 import io.netty.handler.stream.ChunkedWriteHandler;
 import io.netty.util.CharsetUtil;
 
+import pl.skidam.automodpack_core.auth.PeerRegistry;
 import pl.skidam.automodpack_core.auth.Secrets;
+import pl.skidam.automodpack_core.auth.SecretsStore;
 import pl.skidam.automodpack_core.protocol.netty.NettyServer;
 import pl.skidam.automodpack_core.protocol.netty.message.ProtocolMessage;
 import pl.skidam.automodpack_core.protocol.netty.message.request.EchoMessage;
 import pl.skidam.automodpack_core.protocol.netty.message.request.FileRequestMessage;
+import pl.skidam.automodpack_core.protocol.netty.message.request.PeerAnnounceMessage;
 import pl.skidam.automodpack_core.protocol.netty.message.request.RefreshRequestMessage;
 import pl.skidam.automodpack_core.utils.LockFreeInputStream;
 
 public class ServerMessageHandler extends SimpleChannelInboundHandler<ProtocolMessage> {
+
+	// Keeps a single PEER_LIST_RESPONSE_TYPE frame comfortably under the smallest negotiable
+	// chunk size (MIN_CHUNK_SIZE = 8 KB), regardless of how many players happen to be online.
+	private static final int MAX_PEER_LIST_ENTRIES = 32;
 
 	private final NettyServer server;
 	private final Map<byte[], String> secretLookup = new HashMap<>();
@@ -84,9 +91,75 @@ public class ServerMessageHandler extends SimpleChannelInboundHandler<ProtocolMe
 				RefreshRequestMessage refreshRequest = (RefreshRequestMessage) msg;
 				refreshModpackFiles(ctx, refreshRequest.getFileHashesList());
 				break;
+			case PEER_ANNOUNCE_TYPE :
+				PeerAnnounceMessage announceMessage = (PeerAnnounceMessage) msg;
+				handlePeerAnnounce(ctx, address, announceMessage);
+				break;
+			case PEER_LIST_REQUEST_TYPE :
+				handlePeerListRequest(ctx, address, msg.getSecret());
+				break;
 			default :
 				sendError(ctx, protocolVersion, "Unknown message type");
 		}
+	}
+
+	private void handlePeerAnnounce(ChannelHandlerContext ctx, SocketAddress address, PeerAnnounceMessage msg) {
+		if (!serverConfig.lanPeerSharingEnabled) {
+			sendError(ctx, protocolVersion, "LAN peer sharing is disabled on this server");
+			return;
+		}
+
+		String decodedSecret = Base64.getUrlEncoder().withoutPadding().encodeToString(msg.getSecret());
+		var playerSecretPair = SecretsStore.getHostSecret(decodedSecret);
+		if (playerSecretPair == null) {
+			sendError(ctx, protocolVersion, "Unknown session");
+			return;
+		}
+
+		String uuid = playerSecretPair.getKey();
+		String playerName = GAME_CALL.getPlayerName(uuid);
+		server.getPeerRegistry().announce(uuid, playerName, msg.getLanHost(), msg.getLanPort(), msg.getToken(), decodedSecret, address);
+		sendEOT(ctx);
+	}
+
+	private void handlePeerListRequest(ChannelHandlerContext ctx, SocketAddress address, byte[] secret) {
+		if (!serverConfig.lanPeerSharingEnabled) {
+			sendError(ctx, protocolVersion, "LAN peer sharing is disabled on this server");
+			return;
+		}
+
+		String decodedSecret = Base64.getUrlEncoder().withoutPadding().encodeToString(secret);
+		var playerSecretPair = SecretsStore.getHostSecret(decodedSecret);
+		String requesterUuid = playerSecretPair == null ? null : playerSecretPair.getKey();
+
+		List<PeerRegistry.PeerAnnouncement> peers = server.getPeerRegistry().listPeers(requesterUuid);
+		if (peers.size() > MAX_PEER_LIST_ENTRIES) {
+			LOGGER.warn("LAN peer list has {} entries; sending only the first {} to stay within the frame size budget", peers.size(), MAX_PEER_LIST_ENTRIES);
+			peers = peers.subList(0, MAX_PEER_LIST_ENTRIES);
+		}
+		sendPeerList(ctx, peers);
+	}
+
+	private void sendPeerList(ChannelHandlerContext ctx, List<PeerRegistry.PeerAnnouncement> peers) {
+		ByteBuf buf = ctx.alloc().buffer(64 + peers.size() * 128);
+		buf.writeByte(this.protocolVersion);
+		buf.writeByte(PEER_LIST_RESPONSE_TYPE);
+		buf.writeInt(peers.size());
+		for (PeerRegistry.PeerAnnouncement peer : peers) {
+			writeLengthPrefixedUtf8(buf, peer.uuid());
+			writeLengthPrefixedUtf8(buf, peer.playerName());
+			writeLengthPrefixedUtf8(buf, peer.lanHost());
+			buf.writeInt(peer.lanPort());
+			buf.writeInt(peer.token().length);
+			buf.writeBytes(peer.token());
+		}
+		writeControlAndFlush(ctx, buf);
+	}
+
+	private static void writeLengthPrefixedUtf8(ByteBuf buf, String value) {
+		byte[] bytes = value.getBytes(CharsetUtil.UTF_8);
+		buf.writeInt(bytes.length);
+		buf.writeBytes(bytes);
 	}
 
 	private void refreshModpackFiles(ChannelHandlerContext context, byte[][] fileHashesList) throws IOException {

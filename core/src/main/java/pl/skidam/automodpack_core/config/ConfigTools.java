@@ -82,6 +82,7 @@ public final class ConfigTools {
 			if (source.origin != null) object.addProperty("origin", AddressHelpers.formatAddress(source.origin));
 			if (source.endpoint != null) object.addProperty("endpoint", AddressHelpers.formatAddress(source.endpoint));
 			object.add("connectionMode", context.serialize(source.connectionMode));
+			if (source.lanPeerConsent != null) object.addProperty("lanPeerConsent", source.lanPeerConsent);
 			return object;
 		}
 
@@ -96,7 +97,10 @@ public final class ConfigTools {
 				ModpackConnectionMode connectionMode = modeElement == null || modeElement.isJsonNull()
 						? ModpackConnectionMode.defaultFor(Constants.MC_VERSION, Constants.LOADER)
 						: context.deserialize(modeElement, ModpackConnectionMode.class);
-				return new Jsons.ConnectionInfo(origin, endpoint, connectionMode, null, null);
+				Jsons.ConnectionInfo connectionInfo = new Jsons.ConnectionInfo(origin, endpoint, connectionMode, null, null);
+				JsonElement consentElement = object.get("lanPeerConsent");
+				if (consentElement != null && !consentElement.isJsonNull()) connectionInfo.lanPeerConsent = consentElement.getAsBoolean();
+				return connectionInfo;
 			} catch (IllegalArgumentException e) {
 				throw new JsonParseException("Invalid ConnectionInfo", e);
 			}

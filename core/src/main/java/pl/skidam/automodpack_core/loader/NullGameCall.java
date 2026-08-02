@@ -7,4 +7,9 @@ public class NullGameCall implements GameCallService {
 	public boolean isPlayerAuthorized(SocketAddress address, String id) {
 		return true;
 	}
+
+	@Override
+	public String getPlayerName(String id) {
+		return id;
+	}
 }

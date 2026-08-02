@@ -14,6 +14,8 @@ public interface ScreenService {
 
 	void danger(Object... args);
 
+	void lanPeers(Object... args);
+
 	void error(String... args);
 
 	void menu(Object... args);

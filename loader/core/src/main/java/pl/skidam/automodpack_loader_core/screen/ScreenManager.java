@@ -32,6 +32,11 @@ public class ScreenManager implements ScreenService {
 	}
 
 	@Override
+	public void lanPeers(Object... args) {
+		INSTANCE.lanPeers(args);
+	}
+
+	@Override
 	public void error(String... args) {
 		INSTANCE.error(args);
 	}

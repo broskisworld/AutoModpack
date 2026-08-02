@@ -24,6 +24,7 @@ import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.SslProvider;
 import io.netty.util.AttributeKey;
 
+import pl.skidam.automodpack_core.auth.PeerRegistry;
 import pl.skidam.automodpack_core.config.ConfigTools;
 import pl.skidam.automodpack_core.protocol.ModpackConnectionMode;
 import pl.skidam.automodpack_core.protocol.NetUtils;
@@ -42,6 +43,7 @@ public class NettyServer {
 	public static final AttributeKey<Byte> PROTOCOL_VERSION = AttributeKey.valueOf("PROTOCOL_VERSION");
 	private final Map<Channel, String> connections = new ConcurrentHashMap<>();
 	private final Map<String, Path> paths = new ConcurrentHashMap<>();
+	private final PeerRegistry peerRegistry = new PeerRegistry();
 	private MultithreadEventLoopGroup eventLoopGroup;
 	private ChannelFuture serverChannel;
 	private volatile boolean sharedMagicEnabled;
@@ -62,6 +64,10 @@ public class NettyServer {
 
 	public Map<Channel, String> getConnections() {
 		return connections;
+	}
+
+	public PeerRegistry getPeerRegistry() {
+		return peerRegistry;
 	}
 
 	public String getCertificateFingerprint() {

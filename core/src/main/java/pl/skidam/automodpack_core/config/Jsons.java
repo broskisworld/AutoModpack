@@ -29,6 +29,7 @@ public class Jsons {
 		public boolean syncLoaderVersion = true;
 		public boolean playMusic = true;
 		public boolean allowRemoteNonModpackDeletions = true;
+		public boolean lanPeerSharingEnabled = true; // master ask-toggle; false = never prompt or participate
 
 		public ClientConfigFieldsV3() {}
 
@@ -41,6 +42,7 @@ public class Jsons {
 			this.syncLoaderVersion = source.syncLoaderVersion;
 			this.playMusic = source.playMusic;
 			this.allowRemoteNonModpackDeletions = source.allowRemoteNonModpackDeletions;
+			this.lanPeerSharingEnabled = source.lanPeerSharingEnabled;
 		}
 	}
 
@@ -50,8 +52,10 @@ public class Jsons {
 		@SerializedName(value = "endpoint", alternate = "hostAddress")
 		public InetSocketAddress endpoint; // server-advertised AutoModpack route; not an authenticated identity
 		public ModpackConnectionMode connectionMode;
+		public Boolean lanPeerConsent; // null = undecided; persisted per-modpack decision to join LAN peer sharing
 		public transient String expectedFingerprint; // runtime-only exact certificate pin bound to origin
 		public transient String trustReason; // non-null only while importing new trust
+		public transient boolean serverSupportsLanPeers; // this session's fact from the handshake, never persisted
 
 		public ConnectionInfo() {}
 
@@ -168,6 +172,9 @@ public class Jsons {
 		public long secretLifetime = 336; // 336 hours = 14 days
 		public boolean selfUpdater = false;
 		public Set<String> acceptedLoaders = new HashSet<>();
+		// Off by default: enabling this discloses connected players' LAN addresses to each other
+		// so they can download modpack files directly from one another instead of this server.
+		public boolean lanPeerSharingEnabled = false;
 	}
 
 	// Default group for a fresh config and for migrating a V2 config, whose flat file

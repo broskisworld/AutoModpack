@@ -21,6 +21,9 @@ public class PreloadScreenImpl implements ScreenService {
 	public void danger(Object... args) {}
 
 	@Override
+	public void lanPeers(Object... args) {}
+
+	@Override
 	public void error(String... args) {}
 
 	@Override

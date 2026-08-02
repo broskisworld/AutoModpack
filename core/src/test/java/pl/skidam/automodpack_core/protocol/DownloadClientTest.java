@@ -5,18 +5,25 @@ import static pl.skidam.automodpack_core.protocol.NetUtils.CONFIGURATION_CHUNK_S
 import static pl.skidam.automodpack_core.protocol.NetUtils.CONFIGURATION_COMPRESSION_TYPE;
 import static pl.skidam.automodpack_core.protocol.NetUtils.CONFIGURATION_ECHO_TYPE;
 import static pl.skidam.automodpack_core.protocol.NetUtils.END_OF_TRANSMISSION;
+import static pl.skidam.automodpack_core.protocol.NetUtils.ERROR;
 import static pl.skidam.automodpack_core.protocol.NetUtils.FILE_REQUEST_TYPE;
+import static pl.skidam.automodpack_core.protocol.NetUtils.PEER_ANNOUNCE_TYPE;
+import static pl.skidam.automodpack_core.protocol.NetUtils.PEER_LIST_RESPONSE_TYPE;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
@@ -29,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -36,6 +44,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -172,6 +181,143 @@ class DownloadClientTest {
 				server.allowResponses(5);
 				CompletableFuture.allOf(downloads.toArray(CompletableFuture[]::new)).get(5, TimeUnit.SECONDS);
 			}
+		}
+	}
+
+	@Test
+	void announcePeerSendsTheHostPortAndTokenAndParsesTheAcknowledgement() throws Exception {
+		KeyPair keyPair = NetUtils.generateKeyPair();
+		X509Certificate certificate = NetUtils.selfSign(keyPair);
+		String fingerprint = NetUtils.getFingerprint(certificate);
+		byte[] secret = new byte[32];
+		new SecureRandom().nextBytes(secret);
+		byte[] token = new byte[32];
+		new SecureRandom().nextBytes(token);
+
+		try (PeerServer server = new PeerServer(keyPair, certificate, request -> new byte[]{request[0], END_OF_TRANSMISSION})) {
+			Jsons.ConnectionInfo connectionInfo = new Jsons.ConnectionInfo(InetSocketAddress.createUnresolved("127.0.0.1", 25565),
+					new InetSocketAddress(InetAddress.getLoopbackAddress(), server.port()), ModpackConnectionMode.DIRECT, fingerprint, null);
+			try (DownloadClient client = DownloadClient.createAsync(connectionInfo, secret, ignored -> CompletableFuture.completedFuture(false)).get(5,
+					TimeUnit.SECONDS)) {
+				client.announcePeer("192.168.1.42", 51234, token).get(5, TimeUnit.SECONDS);
+
+				ByteBuffer request = ByteBuffer.wrap(server.receivedRequest());
+				request.get(); // version
+				assertEquals(PEER_ANNOUNCE_TYPE, request.get());
+				byte[] receivedSecret = new byte[32];
+				request.get(receivedSecret);
+				assertArrayEquals(secret, receivedSecret);
+				assertEquals("192.168.1.42", readUtf(request));
+				assertEquals(51234, request.getInt());
+				byte[] receivedToken = new byte[request.getInt()];
+				request.get(receivedToken);
+				assertArrayEquals(token, receivedToken);
+			}
+		}
+	}
+
+	@Test
+	void announcePeerFailsWithTheServersErrorMessage() throws Exception {
+		KeyPair keyPair = NetUtils.generateKeyPair();
+		X509Certificate certificate = NetUtils.selfSign(keyPair);
+		String fingerprint = NetUtils.getFingerprint(certificate);
+
+		try (PeerServer server = new PeerServer(keyPair, certificate, request -> errorFrame(request[0], "LAN peer sharing is disabled on this server"))) {
+			Jsons.ConnectionInfo connectionInfo = new Jsons.ConnectionInfo(InetSocketAddress.createUnresolved("127.0.0.1", 25565),
+					new InetSocketAddress(InetAddress.getLoopbackAddress(), server.port()), ModpackConnectionMode.DIRECT, fingerprint, null);
+			try (DownloadClient client = DownloadClient.createAsync(connectionInfo, new byte[32], ignored -> CompletableFuture.completedFuture(false)).get(5,
+					TimeUnit.SECONDS)) {
+				CompletionException thrown = assertThrows(CompletionException.class,
+						() -> client.announcePeer("192.168.1.42", 51234, new byte[32]).join());
+				assertTrue(thrown.getCause().getMessage().contains("LAN peer sharing is disabled"));
+			}
+		}
+	}
+
+	@Test
+	void requestPeerListParsesEveryAnnouncedPeer() throws Exception {
+		KeyPair keyPair = NetUtils.generateKeyPair();
+		X509Certificate certificate = NetUtils.selfSign(keyPair);
+		String fingerprint = NetUtils.getFingerprint(certificate);
+		DownloadClient.PeerInfo alice = new DownloadClient.PeerInfo("uuid-a", "Alice", "192.168.1.10", 4000, new byte[]{1, 2, 3});
+		DownloadClient.PeerInfo bob = new DownloadClient.PeerInfo("uuid-b", "Bob", "192.168.1.11", 4001, new byte[]{4, 5, 6, 7});
+
+		try (PeerServer server = new PeerServer(keyPair, certificate, request -> peerListResponseFrame(request[0], List.of(alice, bob)))) {
+			Jsons.ConnectionInfo connectionInfo = new Jsons.ConnectionInfo(InetSocketAddress.createUnresolved("127.0.0.1", 25565),
+					new InetSocketAddress(InetAddress.getLoopbackAddress(), server.port()), ModpackConnectionMode.DIRECT, fingerprint, null);
+			try (DownloadClient client = DownloadClient.createAsync(connectionInfo, new byte[32], ignored -> CompletableFuture.completedFuture(false)).get(5,
+					TimeUnit.SECONDS)) {
+				List<DownloadClient.PeerInfo> peers = client.requestPeerList().get(5, TimeUnit.SECONDS);
+
+				assertEquals(List.of(alice.uuid(), bob.uuid()), peers.stream().map(DownloadClient.PeerInfo::uuid).toList());
+				assertEquals("Alice", peers.get(0).playerName());
+				assertEquals("192.168.1.10", peers.get(0).lanHost());
+				assertEquals(4000, peers.get(0).lanPort());
+				assertArrayEquals(alice.token(), peers.get(0).token());
+				assertArrayEquals(bob.token(), peers.get(1).token());
+			}
+		}
+	}
+
+	@Test
+	void requestPeerListReturnsEmptyWhenNobodyIsOnline() throws Exception {
+		KeyPair keyPair = NetUtils.generateKeyPair();
+		X509Certificate certificate = NetUtils.selfSign(keyPair);
+		String fingerprint = NetUtils.getFingerprint(certificate);
+
+		try (PeerServer server = new PeerServer(keyPair, certificate, request -> peerListResponseFrame(request[0], List.of()))) {
+			Jsons.ConnectionInfo connectionInfo = new Jsons.ConnectionInfo(InetSocketAddress.createUnresolved("127.0.0.1", 25565),
+					new InetSocketAddress(InetAddress.getLoopbackAddress(), server.port()), ModpackConnectionMode.DIRECT, fingerprint, null);
+			try (DownloadClient client = DownloadClient.createAsync(connectionInfo, new byte[32], ignored -> CompletableFuture.completedFuture(false)).get(5,
+					TimeUnit.SECONDS)) {
+				assertTrue(client.requestPeerList().get(5, TimeUnit.SECONDS).isEmpty());
+			}
+		}
+	}
+
+	private static String readUtf(ByteBuffer buffer) {
+		byte[] bytes = new byte[buffer.getInt()];
+		buffer.get(bytes);
+		return new String(bytes, StandardCharsets.UTF_8);
+	}
+
+	private static void writeUtf(DataOutputStream out, String value) throws IOException {
+		byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+		out.writeInt(bytes.length);
+		out.write(bytes);
+	}
+
+	private static byte[] errorFrame(byte version, String message) {
+		try {
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			DataOutputStream dos = new DataOutputStream(baos);
+			dos.writeByte(version);
+			dos.writeByte(ERROR);
+			writeUtf(dos, message);
+			return baos.toByteArray();
+		} catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+	}
+
+	private static byte[] peerListResponseFrame(byte version, List<DownloadClient.PeerInfo> peers) {
+		try {
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			DataOutputStream dos = new DataOutputStream(baos);
+			dos.writeByte(version);
+			dos.writeByte(PEER_LIST_RESPONSE_TYPE);
+			dos.writeInt(peers.size());
+			for (DownloadClient.PeerInfo peer : peers) {
+				writeUtf(dos, peer.uuid());
+				writeUtf(dos, peer.playerName());
+				writeUtf(dos, peer.lanHost());
+				dos.writeInt(peer.lanPort());
+				dos.writeInt(peer.token().length);
+				dos.write(peer.token());
+			}
+			return baos.toByteArray();
+		} catch (IOException e) {
+			throw new UncheckedIOException(e);
 		}
 	}
 
@@ -313,6 +459,89 @@ class DownloadClientTest {
 			server.close();
 			responsePermits.release(6);
 			for (SSLSocket socket : sockets) socket.close();
+			executor.shutdownNow();
+		}
+	}
+
+	private static final class PeerServer implements AutoCloseable {
+		private final SSLServerSocket server;
+		private final ExecutorService executor = Executors.newSingleThreadExecutor();
+		private final Function<byte[], byte[]> responder;
+		private final CompletableFuture<byte[]> receivedRequest = new CompletableFuture<>();
+		private volatile SSLSocket socket;
+
+		PeerServer(KeyPair keyPair, X509Certificate certificate, Function<byte[], byte[]> responder) throws Exception {
+			this.responder = responder;
+			server = (SSLServerSocket) serverContext(keyPair, certificate).getServerSocketFactory().createServerSocket(0, 5,
+					InetAddress.getLoopbackAddress());
+			server.setEnabledProtocols(new String[]{"TLSv1.3"});
+			executor.execute(this::serve);
+		}
+
+		int port() {
+			return server.getLocalPort();
+		}
+
+		byte[] receivedRequest() throws Exception {
+			return receivedRequest.get(5, TimeUnit.SECONDS);
+		}
+
+		private void serve() {
+			try {
+				socket = (SSLSocket) server.accept();
+				socket.setEnabledProtocols(new String[]{"TLSv1.3"});
+				socket.startHandshake();
+				DataInputStream in = new DataInputStream(new BufferedInputStream(socket.getInputStream()));
+				DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
+
+				int version = in.readUnsignedByte();
+				if (in.readUnsignedByte() != CONFIGURATION_COMPRESSION_TYPE) throw new IOException("Unexpected compression request");
+				in.readUnsignedByte();
+				out.writeByte(version);
+				out.writeByte(CONFIGURATION_COMPRESSION_TYPE);
+				out.writeByte(CompressionType.GZIP.wireId());
+				out.flush();
+
+				version = in.readUnsignedByte();
+				if (in.readUnsignedByte() != CONFIGURATION_CHUNK_SIZE_TYPE) throw new IOException("Unexpected chunk request");
+				int chunkSize = in.readInt();
+				out.writeByte(version);
+				out.writeByte(CONFIGURATION_CHUNK_SIZE_TYPE);
+				out.writeInt(chunkSize);
+				out.flush();
+
+				in.readUnsignedByte();
+				if (in.readUnsignedByte() != CONFIGURATION_ECHO_TYPE) throw new IOException("Unexpected echo request");
+
+				CompressionCodec codec = CompressionFactory.createCodec(CompressionType.GZIP);
+				byte[] request = readFrame(in, codec);
+				receivedRequest.complete(request);
+				writeFrame(out, codec, responder.apply(request));
+			} catch (Exception e) {
+				receivedRequest.completeExceptionally(e);
+			}
+		}
+
+		private static byte[] readFrame(DataInputStream in, CompressionCodec codec) throws IOException {
+			int compressedLength = in.readInt();
+			int originalLength = in.readInt();
+			byte[] compressed = in.readNBytes(compressedLength);
+			if (compressed.length != compressedLength) throw new EOFException("Incomplete request frame");
+			return codec.decompress(compressed, 0, compressedLength, originalLength);
+		}
+
+		private static void writeFrame(DataOutputStream out, CompressionCodec codec, byte[] payload) throws IOException {
+			byte[] compressed = codec.compress(payload);
+			out.writeInt(compressed.length);
+			out.writeInt(payload.length);
+			out.write(compressed);
+			out.flush();
+		}
+
+		@Override
+		public void close() throws Exception {
+			server.close();
+			if (socket != null) socket.close();
 			executor.shutdownNow();
 		}
 	}

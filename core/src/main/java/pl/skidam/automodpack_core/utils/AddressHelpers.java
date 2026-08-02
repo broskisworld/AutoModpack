@@ -13,6 +13,7 @@ import java.net.UnknownHostException;
 import java.util.Enumeration;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 public class AddressHelpers {
 	private static final int MINECRAFT_DEFAULT_PORT = 25565;
@@ -239,11 +240,15 @@ public class AddressHelpers {
 		return result.toString();
 	}
 
+	private static final Pattern PRIVATE_172_RANGE = Pattern.compile("^172\\.(1[6-9]|2[0-9]|3[0-1])\\..*");
+
 	public static boolean isLocal(String address) {
 		if (address == null) return true;
 
 		address = normalizeIp(address);
-		if (address.startsWith("192.168.") || address.startsWith("127.") || address.startsWith("::1") || address.startsWith("0:0:0:0:")) return true;
+		if (address.startsWith("192.168.") || address.startsWith("10.") || PRIVATE_172_RANGE.matcher(address).matches() || address.startsWith("127.")
+				|| address.startsWith("::1") || address.startsWith("0:0:0:0:"))
+			return true;
 
 		String localIp = getLocalIp();
 		String localIpv6 = getLocalIpv6();

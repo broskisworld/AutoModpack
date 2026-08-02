@@ -2,6 +2,7 @@ package pl.skidam.automodpack_core.protocol.netty.handler;
 
 import static pl.skidam.automodpack_core.protocol.NetUtils.*;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import io.netty.buffer.ByteBuf;
@@ -12,6 +13,8 @@ import pl.skidam.automodpack_core.protocol.NetUtils;
 import pl.skidam.automodpack_core.protocol.netty.message.request.EchoMessage;
 import pl.skidam.automodpack_core.protocol.netty.message.request.FileRequestMessage;
 import pl.skidam.automodpack_core.protocol.netty.message.request.FileResponseMessage;
+import pl.skidam.automodpack_core.protocol.netty.message.request.PeerAnnounceMessage;
+import pl.skidam.automodpack_core.protocol.netty.message.request.PeerListRequestMessage;
 import pl.skidam.automodpack_core.protocol.netty.message.request.RefreshRequestMessage;
 
 public class ProtocolMessageDecoder extends ByteToMessageDecoder {
@@ -52,6 +55,19 @@ public class ProtocolMessageDecoder extends ByteToMessageDecoder {
 					fileHashesList[i] = fileHashEntry;
 				}
 				out.add(new RefreshRequestMessage(version, secret, fileHashesList));
+				break;
+			case PEER_ANNOUNCE_TYPE :
+				int lanHostLength = in.readInt();
+				byte[] lanHostBytes = new byte[lanHostLength];
+				in.readBytes(lanHostBytes);
+				int lanPort = in.readInt();
+				int tokenLength = in.readInt();
+				byte[] token = new byte[tokenLength];
+				in.readBytes(token);
+				out.add(new PeerAnnounceMessage(version, secret, new String(lanHostBytes, StandardCharsets.UTF_8), lanPort, token));
+				break;
+			case PEER_LIST_REQUEST_TYPE :
+				out.add(new PeerListRequestMessage(version, secret));
 				break;
 			default :
 				throw new IllegalArgumentException("Unknown message type: " + type);

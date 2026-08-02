@@ -45,4 +45,22 @@ class AddressHelpersTest {
 		var endpoint = AddressHelpers.parseEndpoint("Downloads.Example.com:24444");
 		assertEquals("downloads.example.com:24444", AddressHelpers.formatAddress(endpoint));
 	}
+
+	@Test
+	void recognizesEveryRfc1918PrivateRangeAsLocal() {
+		assertTrue(AddressHelpers.isLocal("192.168.1.42"));
+		assertTrue(AddressHelpers.isLocal("10.0.0.5"));
+		assertTrue(AddressHelpers.isLocal("10.255.255.255"));
+		assertTrue(AddressHelpers.isLocal("172.16.0.1"));
+		assertTrue(AddressHelpers.isLocal("172.31.255.254"));
+		assertTrue(AddressHelpers.isLocal("127.0.0.1"));
+	}
+
+	@Test
+	void doesNotTreatAdjacentPublicRangesAsLocal() {
+		assertFalse(AddressHelpers.isLocal("172.15.0.1"));
+		assertFalse(AddressHelpers.isLocal("172.32.0.1"));
+		assertFalse(AddressHelpers.isLocal("11.0.0.1"));
+		assertFalse(AddressHelpers.isLocal("8.8.8.8"));
+	}
 }

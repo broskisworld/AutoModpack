@@ -4,4 +4,6 @@ import java.net.SocketAddress;
 
 public interface GameCallService {
 	boolean isPlayerAuthorized(SocketAddress address, String id);
+
+	String getPlayerName(String id);
 }

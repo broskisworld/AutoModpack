@@ -13,13 +13,16 @@ public class DataPacket {
 	public Secrets.Secret secret;
 	public boolean modRequired;
 	public ModpackConnectionMode connectionMode;
+	public boolean lanPeerSharingEnabled;
 
-	public DataPacket(String endpointHost, int endpointPort, Secrets.Secret secret, boolean modRequired, ModpackConnectionMode connectionMode) {
+	public DataPacket(String endpointHost, int endpointPort, Secrets.Secret secret, boolean modRequired, ModpackConnectionMode connectionMode,
+			boolean lanPeerSharingEnabled) {
 		this.endpointHost = endpointHost;
 		this.endpointPort = endpointPort;
 		this.secret = secret;
 		this.modRequired = modRequired;
 		this.connectionMode = connectionMode;
+		this.lanPeerSharingEnabled = lanPeerSharingEnabled;
 	}
 
 	public String toJson() {

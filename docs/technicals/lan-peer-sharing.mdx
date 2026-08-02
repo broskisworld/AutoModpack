@@ -1,0 +1,37 @@
+### What it does
+
+When several players on the same local network (a LAN party, a dorm, an office) join the same server, they normally each re-download the same modpack files individually from the server, even though a teammate a few feet away may already have byte-identical copies. LAN peer sharing lets a client fetch those files from another player on the same private network instead of the server, cutting redundant downloads and easing load on the server's own upload bandwidth.
+
+This is opt-in on both ends and always requires the player's confirmation before any peer transfer happens.
+
+### Discovery: server-vouched, not broadcast
+
+AutoModpack never discovers peers by broadcasting on the LAN. Instead, the Minecraft server you're already connected to — and already trust, since you're playing on it — tells you which other currently connected, authorized players have opted in and what their LAN address is. You never learn about, or are learned about by, a stranger who merely shares your Wi-Fi network; only players your server has already authenticated.
+
+This rides the same authenticated, encrypted connection already used to download the modpack itself (see [Connection](connection)): two new message types, a peer announcement and a peer list request, are gated by the exact same per-player secret every file download already requires.
+
+### Why it's safe to trust a peer's files
+
+Every modpack file is already tracked by a manifest SHA1 hash and size, and every downloaded byte — from the server, from Modrinth, from CurseForge, or from a peer — is re-verified against that hash before AutoModpack trusts it. A peer that sends the wrong bytes, whether by malice or a stale local copy, simply fails verification; AutoModpack discards the data and falls back to another source, exactly like a broken CDN mirror. LAN peers are always tried after Modrinth/CurseForge (so mod authors still get credited for direct downloads) and before falling back to the server, which is exactly the case where sharing helps most.
+
+### Why the transfer itself is plain HTTP, not TLS
+
+Peer file transfers happen over a small embedded HTTP server on each participating client, not the TLS protocol used to talk to the origin server. This is a deliberate simplification, not an oversight: transport encryption exists to protect confidentiality and authenticate identity, and neither is the actual security boundary here.
+
+- **Confidentiality**: the files being shared are modpack contents already being distributed to everyone who joins the server — they carry no expectation of secrecy.
+- **Identity**: a peer's identity isn't established by a certificate; it's established by three independent checks, all enforced on every single request:
+  1. The requester's address must be on a private/local subnet.
+  2. The requester must present a rotating capability token that was relayed to them exclusively through the authenticated server connection above — a token never reaches anyone the server hasn't already vetted.
+  3. The requested hash must be part of the modpack this peer was told to serve, and the file is re-verified against that hash immediately before it's streamed.
+
+A peer's HTTP listener only ever serves files it already has locally verified for the active modpack — never arbitrary local files, and never to a remote address outside the local network.
+
+### Confirmation
+
+AutoModpack asks before ever using or providing LAN peer sharing for a given modpack, showing each discovered player's name and LAN address so you know exactly who you'd be exchanging files with. If nobody on your network currently has the modpack, you're never asked. Accepting or declining is remembered per modpack; declining means AutoModpack never announces you as a peer or requests the peer list again for that modpack. The client-side `lanPeerSharingEnabled` setting is a master switch to never be asked at all.
+
+Enabling peer sharing means "join the swarm" both ways: you may download from other players, and other players who also opted in may download from you.
+
+### Server administrators
+
+`lanPeerSharingEnabled` in the server config is off by default because turning it on discloses connected players' LAN addresses to each other. Enabling it does not, by itself, expose anything to players who haven't also opted in — a player only sees peers who explicitly announced themselves.

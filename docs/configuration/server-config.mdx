@@ -96,6 +96,7 @@ These settings control how the file server is exposed to the internet.
 | `updateIpsOnEveryStart`  | `false`                                                    | Updates advertisedEndpointHost on startup. Useful for dynamic residential IPs.                                                                 |
 | `validateSecrets`        | `true`                                                     | Protects downloads using unique, temporary secrets per user.                                                                                   |
 | `secretLifetime`         | `336`                                                      | How long (in hours) a download secret remains valid.                                                                                           |
+| `lanPeerSharingEnabled`  | `false`                                                    | Lets connected, authorized players see each other's LAN address so they can download modpack files directly from one another. Off by default because it discloses players' LAN addresses to each other. See [LAN Peer Sharing](../technicals/lan-peer-sharing). |
 
 ### Connection modes and ports
 

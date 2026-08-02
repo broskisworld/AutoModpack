@@ -1,6 +1,7 @@
 package pl.skidam.automodpack.client;
 
 import pl.skidam.automodpack.client.ui.*;
+import pl.skidam.automodpack_core.protocol.DownloadClient;
 import pl.skidam.automodpack_core.utils.FetchManager;
 import pl.skidam.automodpack_loader_core.client.Changelogs;
 import pl.skidam.automodpack_loader_core.client.ModpackUpdater;
@@ -9,6 +10,7 @@ import pl.skidam.automodpack_loader_core.utils.DownloadManager;
 import pl.skidam.automodpack_loader_core.utils.UpdateType;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
@@ -43,6 +45,11 @@ public class ScreenImpl implements ScreenService {
 	@Override
 	public void danger(Object... args) {
 		executeOnClient(() -> Screens.danger(args[0]));
+	}
+
+	@Override
+	public void lanPeers(Object... args) {
+		executeOnClient(() -> Screens.lanPeers(args[0], args[1]));
 	}
 
 	@Override
@@ -116,6 +123,11 @@ public class ScreenImpl implements ScreenService {
 
 		public static void danger(Object modpackUpdaterInstance) {
 			Screens.setScreen(new DangerScreen((ModpackUpdater) modpackUpdaterInstance));
+		}
+
+		@SuppressWarnings("unchecked")
+		public static void lanPeers(Object modpackUpdaterInstance, Object peers) {
+			Screens.setScreen(new LanPeerScreen((ModpackUpdater) modpackUpdaterInstance, (List<DownloadClient.PeerInfo>) peers));
 		}
 
 		public static void error(String... errors) {

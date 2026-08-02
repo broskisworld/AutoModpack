@@ -21,4 +21,9 @@ public class GameCall implements GameCallService {
 
 		return GameHelpers.isPlayerAuthorized(address, profile);
 	}
+
+	@Override
+	public String getPlayerName(String id) {
+		return GameHelpers.getPlayerName(GameHelpers.getPlayerProfile(id));
+	}
 }

@@ -5,6 +5,7 @@ import static pl.skidam.automodpack_core.Constants.*;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
@@ -24,10 +25,12 @@ import java.util.stream.Stream;
 import org.jetbrains.annotations.Nullable;
 
 import pl.skidam.automodpack_core.auth.Secrets;
+import pl.skidam.automodpack_core.config.ConfigTools;
 import pl.skidam.automodpack_core.config.Jsons;
 import pl.skidam.automodpack_core.modpack.ClientSelectionManager;
 import pl.skidam.automodpack_core.modpack.ModpackId;
 import pl.skidam.automodpack_core.protocol.DownloadClient;
+import pl.skidam.automodpack_core.protocol.peer.PeerHostServer;
 import pl.skidam.automodpack_core.update.UpdateDeferredException;
 import pl.skidam.automodpack_core.update.UpdatePlan;
 import pl.skidam.automodpack_core.update.UpdatePlanner;
@@ -75,6 +78,12 @@ public class ModpackUpdater implements AutoCloseable {
 	private volatile ScheduledFuture<?> confirmationExpiry;
 	private Path modpackDir;
 	private Path modpackContentFile;
+
+	private final PeerHostServer peerHostServer = new PeerHostServer();
+	private List<DownloadClient.PeerInfo> knownPeers = List.of();
+	private boolean peerConsent = false;
+	private int peerHostPort = -1;
+	private Set<Jsons.ModpackContentFields.ModpackContentItem> pendingPeerConsentFiles;
 
 	public String getModpackName() {
 		return serverModpackContent.modpackName;
@@ -283,6 +292,8 @@ public class ModpackUpdater implements AutoCloseable {
 			return;
 		}
 
+		if (gateOnPeerConsent(filesToUpdate)) return;
+
 		new ScreenManager().download(downloadManager, getModpackName());
 		long start = System.currentTimeMillis();
 
@@ -383,6 +394,7 @@ public class ModpackUpdater implements AutoCloseable {
 			if (fetchManager != null && fetchManager.getFetchDatas().containsKey(serverFileHash)) {
 				sources.addAll(fetchManager.getFetchDatas().get(serverFileHash).fetchedData().sources());
 			}
+			appendLanPeerSources(sources, serverFileHash);
 
 			Consumer<DownloadManager.FailureCategory> failureCallback = category -> {
 				failedDownloads.put(serverItem, sources.stream().map(DownloadSource::url).toList());
@@ -466,9 +478,10 @@ public class ModpackUpdater implements AutoCloseable {
 
 		for (var serverItem : refreshedFilesToAcquire) {
 			Path downloadFile = SmartFileUtils.getPath(modpackDir, serverItem.file);
-			List<DownloadSource> sources = refreshedFetchManager != null && refreshedFetchManager.getFetchDatas().containsKey(serverItem.sha1)
+			List<DownloadSource> sources = new ArrayList<>(refreshedFetchManager != null && refreshedFetchManager.getFetchDatas().containsKey(serverItem.sha1)
 					? refreshedFetchManager.getFetchDatas().get(serverItem.sha1).fetchedData().sources()
-					: List.of();
+					: List.of());
+			appendLanPeerSources(sources, serverItem.sha1);
 			Consumer<DownloadManager.FailureCategory> failureCallback = category -> {
 				failedDownloads.put(serverItem, sources.stream().map(DownloadSource::url).toList());
 				failedDownloadCategories.put(serverItem, category);
@@ -732,6 +745,102 @@ public class ModpackUpdater implements AutoCloseable {
 		}
 	}
 
+	// true means the LAN peer consent screen is now showing and the caller must stop; resumeAfterPeerConsent
+	// re-enters startUpdate once the player decides. false means there's nothing to ask about.
+	private boolean gateOnPeerConsent(Set<Jsons.ModpackContentFields.ModpackContentItem> filesToUpdate) {
+		if (!connectionInfo.serverSupportsLanPeers || !clientConfig.lanPeerSharingEnabled) return false;
+
+		Jsons.ConnectionInfo stored = clientConfig.modpackConnections == null ? null : clientConfig.modpackConnections.get(serverModpackContent.modpackId);
+		Boolean decided = stored != null ? stored.lanPeerConsent : null;
+		if (Boolean.FALSE.equals(decided)) return false;
+
+		List<DownloadClient.PeerInfo> peers;
+		try {
+			peers = downloadClient.requestPeerList().join();
+		} catch (Exception e) {
+			LOGGER.warn("Failed to fetch LAN peer list; continuing without LAN peer sharing", e);
+			peers = List.of();
+		}
+
+		if (peers.isEmpty()) return false;
+
+		if (Boolean.TRUE.equals(decided)) {
+			knownPeers = peers;
+			peerConsent = true;
+			ensurePeerServingStarted();
+			announceSelfAsPeer();
+			return false;
+		}
+
+		knownPeers = peers;
+		pendingPeerConsentFiles = filesToUpdate;
+		new ScreenManager().lanPeers(this, peers);
+		return true;
+	}
+
+	public void resumeAfterPeerConsent(boolean allow) {
+		persistPeerConsent(allow);
+		peerConsent = allow;
+		if (allow) {
+			ensurePeerServingStarted();
+			announceSelfAsPeer();
+		} else {
+			knownPeers = List.of();
+		}
+
+		Set<Jsons.ModpackContentFields.ModpackContentItem> files = pendingPeerConsentFiles;
+		pendingPeerConsentFiles = null;
+		DownloadClient.NET_EXECUTOR.execute(() -> startUpdate(files));
+	}
+
+	private void persistPeerConsent(boolean allow) {
+		connectionInfo.lanPeerConsent = allow;
+		if (clientConfig.modpackConnections == null) clientConfig.modpackConnections = new HashMap<>();
+		clientConfig.modpackConnections.put(serverModpackContent.modpackId, connectionInfo);
+		try {
+			ConfigTools.writeAtomic(clientConfigFile, clientConfig);
+		} catch (Exception e) {
+			LOGGER.error("Failed to persist LAN peer sharing decision", e);
+		}
+	}
+
+	private void ensurePeerServingStarted() {
+		if (peerHostServer.isRunning()) return;
+		try {
+			Set<String> hashes = serverModpackContent.list.stream().map(item -> item.sha1.toLowerCase(Locale.ROOT)).collect(Collectors.toSet());
+			peerHostServer.setAllowedHashes(hashes);
+			peerHostPort = peerHostServer.start();
+		} catch (IOException e) {
+			LOGGER.warn("Failed to start LAN peer host server; this session will only download from peers, not serve them", e);
+		}
+	}
+
+	private void announceSelfAsPeer() {
+		if (!peerHostServer.isRunning()) return;
+		// Ask the server what it actually bound to rather than re-resolving the local address
+		// separately - the two must never disagree about which interface peers are told to use.
+		String boundHost = peerHostServer.getBoundHost();
+		if (boundHost == null) {
+			LOGGER.warn("Could not determine a local LAN address; not announcing as a LAN peer");
+			return;
+		}
+		downloadClient.announcePeer(boundHost, peerHostPort, peerHostServer.getToken()).exceptionally(e -> {
+			LOGGER.warn("Failed to announce as a LAN peer", e);
+			return null;
+		});
+	}
+
+	private void appendLanPeerSources(List<DownloadSource> sources, String sha1) {
+		if (!peerConsent || knownPeers.isEmpty()) return;
+		String normalizedHash = sha1.toLowerCase(Locale.ROOT);
+		String encodedHash = URLEncoder.encode(normalizedHash, StandardCharsets.UTF_8);
+		for (DownloadClient.PeerInfo peer : knownPeers) {
+			String token = Base64.getUrlEncoder().withoutPadding().encodeToString(peer.token());
+			String url = "http://" + peer.lanHost() + ":" + peer.lanPort() + "/automodpack/peer/" + encodedHash + "?token=" + token;
+			sources.add(new DownloadSource(url, DownloadSource.Provider.LAN_PEER));
+		}
+	}
+
 	private boolean beginConfirmation() {
 		if (!confirmationState.compareAndSet(ConfirmationState.INACTIVE, ConfirmationState.WAITING)) return false;
 		confirmationExpiry = CONFIRMATION_TIMER.schedule(() -> {
@@ -750,7 +859,10 @@ public class ModpackUpdater implements AutoCloseable {
 	public void close() {
 		confirmationState.compareAndSet(ConfirmationState.WAITING, ConfirmationState.CANCELLED);
 		cancelConfirmationExpiry();
-		if (closed.compareAndSet(false, true) && downloadClient != null) downloadClient.close();
+		if (closed.compareAndSet(false, true)) {
+			if (downloadClient != null) downloadClient.close();
+			peerHostServer.stop();
+		}
 	}
 
 	public enum ConfirmationState {

@@ -133,4 +133,22 @@ class ConfigToolsTest {
 		String invalid = "{\"origin\":\"play.example.com\",\"endpoint\":\"downloads.example.com\"}";
 		assertThrows(ConfigTools.ConfigException.class, () -> ConfigTools.parse(invalid, Jsons.ConnectionInfo.class));
 	}
+
+	@Test
+	void lanPeerConsentPersistsButServerSupportIsSessionOnly() throws Exception {
+		Jsons.ConnectionInfo connectionInfo = new Jsons.ConnectionInfo(AddressHelpers.parseOrigin("play.example.com"),
+				AddressHelpers.parseEndpoint("downloads.example.com:24444"), ModpackConnectionMode.DIRECT, null, null);
+		connectionInfo.lanPeerConsent = true;
+		connectionInfo.serverSupportsLanPeers = true;
+
+		Path path = temporaryDirectory.resolve("client.json");
+		ConfigTools.writeAtomic(path, connectionInfo);
+		String serialized = Files.readString(path, StandardCharsets.UTF_8);
+		assertTrue(serialized.contains("\"lanPeerConsent\": true"));
+		assertFalse(serialized.contains("serverSupportsLanPeers"));
+
+		Jsons.ConnectionInfo reloaded = ConfigTools.read(path, Jsons.ConnectionInfo.class).orElseThrow();
+		assertEquals(Boolean.TRUE, reloaded.lanPeerConsent);
+		assertFalse(reloaded.serverSupportsLanPeers);
+	}
 }

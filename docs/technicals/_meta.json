@@ -22,5 +22,9 @@
   "modpack-hosting.mdx": {
     "name": "Modpack Hosting",
     "icon": null
+  },
+  "lan-peer-sharing.mdx": {
+    "name": "LAN Peer Sharing",
+    "icon": null
   }
 }

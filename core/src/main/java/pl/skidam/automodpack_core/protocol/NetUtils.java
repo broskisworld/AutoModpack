@@ -46,6 +46,9 @@ public class NetUtils {
 	public static final byte REFRESH_REQUEST_TYPE = 0x03;
 	public static final byte END_OF_TRANSMISSION = 0x04;
 	public static final byte ERROR = 0x05;
+	public static final byte PEER_ANNOUNCE_TYPE = 0x06;
+	public static final byte PEER_LIST_REQUEST_TYPE = 0x07;
+	public static final byte PEER_LIST_RESPONSE_TYPE = 0x08;
 
 	// Configuration message types
 	public static final byte CONFIGURATION_ECHO_TYPE = 0x40;

@@ -28,6 +28,11 @@
   "automodpack.danger.confirm": "Download",
   "automodpack.danger.cancel": "Don't download",
 
+  "automodpack.lanpeers.title": "Download from players on your network?",
+  "automodpack.lanpeers.description": "These players on your local network already have this modpack and can share files with you directly, which is usually much faster:",
+  "automodpack.lanpeers.allow": "Yes, use local players",
+  "automodpack.lanpeers.deny": "No, only use the server",
+
   "automodpack.changelog.view": "View changelogs",
   "automodpack.changelog.noChanges": "No changes found.",
   "automodpack.changelog.openPage": "Open project page",
