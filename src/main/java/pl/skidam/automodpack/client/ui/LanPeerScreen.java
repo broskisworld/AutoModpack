@@ -55,6 +55,9 @@ public class LanPeerScreen extends VersionedScreen {
 		drawCenteredTextWithShadow(matrices, this.font, VersionedText.translatable("automodpack.lanpeers.description"), this.width / 2, top + lineHeight * 2,
 				TextColors.WHITE);
 
+		drawCenteredTextWithShadow(matrices, this.font, VersionedText.translatable("automodpack.lanpeers.warning"), this.width / 2, top + lineHeight * 3,
+				TextColors.YELLOW);
+
 		int listed = Math.min(peers.size(), MAX_LISTED_PEERS);
 		for (int i = 0; i < listed; i++) {
 			DownloadClient.PeerInfo peer = peers.get(i);
